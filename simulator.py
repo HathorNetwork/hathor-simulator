@@ -168,14 +168,14 @@ class HathorSimulator(object):
             ret = list(self.tips)
 
         v = []
+        if len(ret) < qty:
+            v += random.sample(self.transactions[-15:], min(len(self.transactions), qty - len(ret)))
+
         for x in ret:
             tx = self.tx_by_name[x]
             self.tips.remove(x)
             self.add_tx(tx)
             v.append(tx)
-
-        if len(v) < qty:
-            v += random.sample(self.transactions[-15:], min(len(self.transactions), qty - len(ret)))
 
         return v
 
