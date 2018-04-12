@@ -10,6 +10,11 @@ sys.setrecursionlimit(100000)
 
 Event = namedtuple('Event', 'dt run params')
 
+def sum_weights(w1, w2):
+    a = max(w1, w2)
+    b = min(w1, w2)
+    return a + log(1 + 2**(b-a))/log(2)
+
 class Transaction(object):
     def __init__(self, simulator, name, type, time, parents, weight, publisher):
         self.simulator = simulator
@@ -28,11 +33,13 @@ class Transaction(object):
             weight = self.weight
         if used is None:
             used = set()
+
         used.add(self)
         if self.acc_weight > self.simulator.min_weight_confirmed:
             return
 
-        self.acc_weight = log((2**self.acc_weight) + 2**weight)/log(2)
+        #self.acc_weight = log((2**self.acc_weight) + 2**weight)/log(2)
+        self.acc_weight = sum_weights(self.acc_weight, weight)
         if self.acc_weight > self.simulator.min_weight_confirmed:
             if 'confirmed_time' not in self.extras:
                 self.extras['confirmed_time'] = self.simulator.cur_time
@@ -156,7 +163,8 @@ class HathorSimulator(object):
     def update_min_weight_confirmed(self):
         w_blk = log(6)/log(2) + self.block_weight
         w_tx = self.tx_weight
-        self.min_weight_confirmed = log(2**w_blk + 2**w_tx)/log(2)
+        #self.min_weight_confirmed = log(2**w_blk + 2**w_tx)/log(2)
+        self.min_weight_confirmed = sum_weights(w_blk, w_tx)
         #print('[{:12.2f}] min weight updated: w_blk={:6.4f} w_tx={:6.4f}'.format(self.cur_time, w_blk, w_tx))
 
     def new_tx(self, *args, **kwargs):
@@ -166,7 +174,8 @@ class HathorSimulator(object):
 
     def add_tip(self, tx):
         self.tips.add(tx.name)
-        self.tx_weight_tmp = log(2**(self.tx_weight_tmp) + 2**tx.weight)/log(2)
+        #self.tx_weight_tmp = log(2**(self.tx_weight_tmp) + 2**tx.weight)/log(2)
+        self.tx_weight_tmp = sum_weights(self.tx_weight_tmp, tx.weight)
         if self.cur_time - self.latest_tx_weight_update > 3600:
             self.update_tx_weight()
 
@@ -253,8 +262,11 @@ class HathorSimulator(object):
             if self.cur_time - t0 >= total_dt:
                 return
 
-    def gen_dot(self):
+    def gen_dot(self, highlight=None):
         from graphviz import Digraph
+
+        if highlight is None:
+            highlight = {}
 
         dot = Digraph(format='pdf')
 
@@ -263,27 +275,41 @@ class HathorSimulator(object):
 
         dot.attr('node', shape='box', style='filled', fillcolor='#EC644B')
         for i, blk in enumerate(self.blocks):
+            attrs = {}
+            if blk in highlight:
+                attrs.update(highlight[blk])
             dot.node(blk.type + blk.name)
 
         dot.attr('node', shape='oval', style='')
         nodes = self.transactions + self.blocks
         nodes.sort(key=lambda x: x.time)
         for i, tx in enumerate(nodes):
+            attrs_node = {}
+
             if tx.type == 'blk':
                 attrs = {'penwidth': '4'}
             else:
                 attrs = {}
 
                 if tx.acc_weight > self.min_weight_confirmed:
-                    dot.node(tx.type + tx.name, style='filled', fillcolor='#87D37C')
+                    attrs_node.update({'style': 'filled', 'fillcolor': '#87D37C'})
+
+            if tx in highlight:
+                attrs_node.update(highlight[tx])
+            if attrs_node:
+                dot.node(tx.type + tx.name, **attrs_node)
 
             for parent in tx.parents:
                 dot.edge(tx.type+tx.name, parent.type+parent.name, **attrs)
 
         dot.attr('node', style='')
-        attrs = {'style': 'filled', 'fillcolor': '#F5D76E'}
         for x in self.tips:
             tx = self.tx_by_name[x]
+            attrs = {'style': 'filled', 'fillcolor': '#F5D76E'}
+
+            if tx in highlight:
+                attrs.update(highlight[tx])
+
             nodes.append(tx)
             dot.node(tx.type + tx.name, **attrs)
 
@@ -291,7 +317,10 @@ class HathorSimulator(object):
                 dot.edge(tx.type+tx.name, parent.type+parent.name)
 
         for tx in self.pow:
-            dot.node(tx.type+tx.name, style='dashed,filled', fillcolor='#BDC3C7')
+            attrs = {'style': 'dashed,filled', 'fillcolor': '#BDC3C7'}
+            if tx in highlight:
+                attrs.update(highlight)
+            dot.node(tx.type+tx.name, **attrs)
             for parent in tx.parents:
                 dot.edge(tx.type+tx.name, parent.type+parent.name, style='dashed', arrowhead='empty')
 
