@@ -8,7 +8,7 @@ import time
 
 sys.setrecursionlimit(100000)
 
-Event = namedtuple('Event', 'dt run')
+Event = namedtuple('Event', 'dt run params')
 
 class Transaction(object):
     def __init__(self, simulator, name, type, time, parents, weight, publisher):
@@ -21,11 +21,13 @@ class Transaction(object):
         self.publisher = publisher
         self.is_tip = False
         self.extras = {}
-
         self.acc_weight = float('-inf')
-        self.update_acc_weight(self.weight, used=set())
 
-    def update_acc_weight(self, weight, used=set()):
+    def update_acc_weight(self, weight=None, used=None):
+        if weight is None:
+            weight = self.weight
+        if used is None:
+            used = set()
         used.add(self)
         if self.acc_weight > self.simulator.min_weight_confirmed:
             return
@@ -63,7 +65,7 @@ class Miner(object):
     def schedule_next_block(self):
         trials = numpy.random.geometric(self.geometric_p)
         dt = 1.0 * trials / self.hashpower
-        ev = Event(self.simulator.cur_time + dt, self.gen_new_block)
+        ev = Event(self.simulator.cur_time + dt, self.gen_new_block, None)
         heapq.heappush(self.events, ev)
 
     def get_latest_block(self):
@@ -71,7 +73,7 @@ class Miner(object):
             return None
         return self.simulator.blocks[-1]
     
-    def gen_new_block(self):
+    def gen_new_block(self, ev):
         if not self.enabled:
             return
         ref_block = self.get_latest_block()
@@ -79,6 +81,7 @@ class Miner(object):
         if ref_block:
             parents.append(ref_block)
         block = self.simulator.new_tx(type='blk', time=self.simulator.cur_time, parents=parents, weight=self.weight, publisher=self)
+        block.update_acc_weight()
         self.simulator.add_block(block)
         self.schedule_next_block()
 
@@ -101,19 +104,25 @@ class TxGenerator(object):
 
     def schedule_next_tx(self):
         dt = random.expovariate(self.tx_lambda)
-        ev = Event(self.simulator.cur_time + dt, self.gen_new_pow)
+        ev = Event(self.simulator.cur_time + dt, self.gen_new_pow, None)
         heapq.heappush(self.events, ev)
 
-    def gen_new_pow(self):
+    def gen_new_pow(self, ev):
         trials = numpy.random.geometric(self.geometric_p)
         dt = 1.0 * trials / self.hashpower
-        ev = Event(self.simulator.cur_time + dt, self.gen_new_tx)
+
+        parents = self.simulator.get_two_tips()
+        tx = self.simulator.new_tx(type='tx', time=self.simulator.cur_time, parents=parents, weight=self.weight, publisher=self)
+        self.simulator.pow.add(tx)
+
+        ev = Event(self.simulator.cur_time + dt, self.gen_new_tx, tx)
         heapq.heappush(self.events, ev)
         self.schedule_next_tx()
 
-    def gen_new_tx(self):
-        parents = self.simulator.get_two_tips()
-        tx = self.simulator.new_tx(type='tx', time=self.simulator.cur_time, parents=parents, weight=self.weight, publisher=self)
+    def gen_new_tx(self, ev):
+        tx = ev.params
+        self.simulator.pow.remove(tx)
+        tx.update_acc_weight()
         self.tx_by_name[tx.name] = tx
         self.simulator.add_tip(tx)
 
@@ -130,6 +139,7 @@ class HathorSimulator(object):
         self.tx_by_name = {}
         self.transactions = []
         self.tips = set()
+        self.pow = set()
 
         self.block_weight = block_weight
         self.latest_weight_update = 0
@@ -147,7 +157,7 @@ class HathorSimulator(object):
         w_blk = log(6)/log(2) + self.block_weight
         w_tx = self.tx_weight
         self.min_weight_confirmed = log(2**w_blk + 2**w_tx)/log(2)
-        print('[{:12.2f}] min weight updated: w_blk={:6.4f} w_tx={:6.4f}'.format(self.cur_time, w_blk, w_tx))
+        #print('[{:12.2f}] min weight updated: w_blk={:6.4f} w_tx={:6.4f}'.format(self.cur_time, w_blk, w_tx))
 
     def new_tx(self, *args, **kwargs):
         name = str(self.tx_count)
@@ -239,7 +249,7 @@ class HathorSimulator(object):
                 t1 = self.cur_time
             ev = heapq.heappop(self.events)
             self.cur_time = ev.dt
-            ev.run()
+            ev.run(ev)
             if self.cur_time - t0 >= total_dt:
                 return
 
@@ -256,7 +266,6 @@ class HathorSimulator(object):
             dot.node(blk.type + blk.name)
 
         dot.attr('node', shape='oval', style='')
-
         nodes = self.transactions + self.blocks
         nodes.sort(key=lambda x: x.time)
         for i, tx in enumerate(nodes):
@@ -265,17 +274,26 @@ class HathorSimulator(object):
             else:
                 attrs = {}
 
+                if tx.acc_weight > self.min_weight_confirmed:
+                    dot.node(tx.type + tx.name, style='filled', fillcolor='#87D37C')
+
             for parent in tx.parents:
                 dot.edge(tx.type+tx.name, parent.type+parent.name, **attrs)
 
-        dot.attr('node', style='filled', fillcolor='#aaaaaa')
+        dot.attr('node', style='')
+        attrs = {'style': 'filled', 'fillcolor': '#F5D76E'}
         for x in self.tips:
             tx = self.tx_by_name[x]
             nodes.append(tx)
-            dot.node(tx.type + tx.name)
+            dot.node(tx.type + tx.name, **attrs)
 
             for parent in tx.parents:
-                dot.edge(tx.type+tx.name, parent.type+parent.name, **attrs)
+                dot.edge(tx.type+tx.name, parent.type+parent.name)
+
+        for tx in self.pow:
+            dot.node(tx.type+tx.name, style='dashed,filled', fillcolor='#BDC3C7')
+            for parent in tx.parents:
+                dot.edge(tx.type+tx.name, parent.type+parent.name, style='dashed', arrowhead='empty')
 
         return dot
 
