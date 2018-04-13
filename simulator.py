@@ -27,6 +27,7 @@ class Transaction(object):
         self.is_tip = False
         self.extras = {}
         self.acc_weight = float('-inf')
+        self.is_confirmed = False
 
     def update_acc_weight(self, weight=None, used=None):
         if weight is None:
@@ -41,6 +42,7 @@ class Transaction(object):
         #self.acc_weight = log((2**self.acc_weight) + 2**weight)/log(2)
         self.acc_weight = sum_weights(self.acc_weight, weight)
         if self.acc_weight > self.simulator.min_weight_confirmed:
+            self.is_confirmed = True
             if 'confirmed_time' not in self.extras:
                 self.extras['confirmed_time'] = self.simulator.cur_time
         for parent in self.parents:
@@ -49,6 +51,13 @@ class Transaction(object):
 
     def __repr__(self):
         return 'Tx({})'.format(self.name)
+
+    def confirm_parents(self):
+        for parent in self.parents:
+            if parent in self.simulator.tips:
+                parent.extras['first_confirmation_time'] = self.simulator.cur_time
+                self.simulator.tips.remove(parent)
+                self.simulator.add_tx(parent)
 
 
 
@@ -85,6 +94,8 @@ class Miner(object):
             return
         ref_block = self.get_latest_block()
         parents = self.simulator.get_two_tips()
+        for tx in parents:
+            tx.confirm_parents()
         if ref_block:
             parents.append(ref_block)
         block = self.simulator.new_tx(type='blk', time=self.simulator.cur_time, parents=parents, weight=self.weight, publisher=self)
@@ -131,11 +142,9 @@ class TxGenerator(object):
         self.schedule_next_tx()
 
     def gen_new_tx(self, ev):
-        if not self.enabled:
-            return
-
         tx = ev.params
         self.simulator.pow.remove(tx)
+        tx.confirm_parents()
         tx.update_acc_weight()
         self.tx_by_name[tx.name] = tx
         self.simulator.add_tip(tx)
@@ -180,7 +189,7 @@ class HathorSimulator(object):
         return Transaction(self, name, *args, **kwargs)
 
     def add_tip(self, tx):
-        self.tips.add(tx.name)
+        self.tips.add(tx)
         #self.tx_weight_tmp = log(2**(self.tx_weight_tmp) + 2**tx.weight)/log(2)
         self.tx_weight_tmp = sum_weights(self.tx_weight_tmp, tx.weight)
         if self.cur_time - self.latest_tx_weight_update > 3600:
@@ -246,18 +255,10 @@ class HathorSimulator(object):
         else:
             ret = list(self.tips)
 
-        v = []
         if len(ret) < qty:
-            v += random.sample(self.transactions[-15:], min(len(self.transactions), qty - len(ret)))
+            ret += random.sample(self.transactions[-15:], min(len(self.transactions), qty - len(ret)))
 
-        for x in ret:
-            tx = self.tx_by_name[x]
-            tx.extras['first_confirmation_time'] = self.cur_time
-            self.tips.remove(x)
-            self.add_tx(tx)
-            v.append(tx)
-
-        return v
+        return ret
 
     def run(self, total_dt, report_interval=None):
         rt0 = time.time()
@@ -304,7 +305,7 @@ class HathorSimulator(object):
             else:
                 attrs = {}
 
-                if tx.acc_weight > self.min_weight_confirmed:
+                if tx.is_confirmed:
                     attrs_node.update({'style': 'filled', 'fillcolor': '#87D37C'})
 
             if tx in highlight:
@@ -316,8 +317,7 @@ class HathorSimulator(object):
                 dot.edge(tx.type+tx.name, parent.type+parent.name, **attrs)
 
         dot.attr('node', style='')
-        for x in self.tips:
-            tx = self.tx_by_name[x]
+        for tx in self.tips:
             attrs = {'style': 'filled', 'fillcolor': '#F5D76E'}
 
             if tx in highlight:
