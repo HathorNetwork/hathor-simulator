@@ -100,6 +100,7 @@ class TxGenerator(object):
         self.hashpower = hashpower
         self.weight = 17
         self.geometric_p = 2**(-self.weight)
+        self.enabled = False
 
     def set_simulator(self, simulator):
         self.simulator = simulator
@@ -115,6 +116,9 @@ class TxGenerator(object):
         heapq.heappush(self.events, ev)
 
     def gen_new_pow(self, ev):
+        if not self.enabled:
+            return
+
         trials = numpy.random.geometric(self.geometric_p)
         dt = 1.0 * trials / self.hashpower
 
@@ -127,6 +131,9 @@ class TxGenerator(object):
         self.schedule_next_tx()
 
     def gen_new_tx(self, ev):
+        if not self.enabled:
+            return
+
         tx = ev.params
         self.simulator.pow.remove(tx)
         tx.update_acc_weight()
@@ -221,10 +228,16 @@ class HathorSimulator(object):
         self.miners.pop(idx)
         miner.enabled = False
 
+    def remove_tx_generator(self, txgen):
+        idx = self.tx_generators.index(txgen)
+        self.tx_generators.pop(idx)
+        txgen.enabled = False
+
 
     def add_tx_generator(self, txgen):
         self.tx_generators.append(txgen)
         txgen.set_simulator(self)
+        txgen.enabled = True
 
     def get_two_tips(self):
         qty = 2
