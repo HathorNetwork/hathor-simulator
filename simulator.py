@@ -2,152 +2,16 @@ import random
 import heapq
 import numpy.random
 from math import ceil, log
-from collections import namedtuple
 import sys
 import time
 
+from utils import sum_weights
+from event import Event
+from transaction import Transaction
+from txgenerator import TxGenerator
+from miner import Miner
+
 sys.setrecursionlimit(100000)
-
-Event = namedtuple('Event', 'dt run params')
-
-def sum_weights(w1, w2):
-    a = max(w1, w2)
-    b = min(w1, w2)
-    return a + log(1 + 2**(b-a))/log(2)
-
-class Transaction(object):
-    def __init__(self, simulator, name, type, time, parents, weight, publisher):
-        self.simulator = simulator
-        self.name = name
-        self.type = type
-        self.time = time
-        self.parents = parents
-        self.weight = weight
-        self.publisher = publisher
-        self.is_tip = False
-        self.extras = {}
-        self.acc_weight = float('-inf')
-        self.is_confirmed = False
-
-    def update_acc_weight(self, weight=None, used=None):
-        if weight is None:
-            weight = self.weight
-        if used is None:
-            used = set()
-
-        used.add(self)
-        if self.acc_weight > self.simulator.min_weight_confirmed:
-            return
-
-        #self.acc_weight = log((2**self.acc_weight) + 2**weight)/log(2)
-        self.acc_weight = sum_weights(self.acc_weight, weight)
-        if self.acc_weight > self.simulator.min_weight_confirmed:
-            self.is_confirmed = True
-            if 'confirmed_time' not in self.extras:
-                self.extras['confirmed_time'] = self.simulator.cur_time
-        for parent in self.parents:
-            if parent not in used:
-                parent.update_acc_weight(weight, used)
-
-    def __repr__(self):
-        return 'Tx({})'.format(self.name)
-
-    def confirm_parents(self):
-        for parent in self.parents:
-            if parent in self.simulator.tips:
-                parent.extras['first_confirmation_time'] = self.simulator.cur_time
-                self.simulator.tips.remove(parent)
-                self.simulator.add_tx(parent)
-
-
-
-class Miner(object):
-    def __init__(self, hashpower):
-        self.simulator = None
-        self.hashpower = hashpower
-        self.enabled = False
-
-    def set_simulator(self, simulator):
-        self.simulator = simulator
-        self.events = simulator.events
-        self.blocks = simulator.blocks
-        self.update_weight(simulator.block_weight)
-        self.schedule_next_block()
-
-    def update_weight(self, weight):
-        self.weight = weight
-        self.geometric_p = 2**(-self.weight)
-
-    def schedule_next_block(self):
-        trials = numpy.random.geometric(self.geometric_p)
-        dt = 1.0 * trials / self.hashpower
-        ev = Event(self.simulator.cur_time + dt, self.gen_new_block, None)
-        heapq.heappush(self.events, ev)
-
-    def get_latest_block(self):
-        if not self.simulator.blocks:
-            return None
-        return self.simulator.blocks[-1]
-    
-    def gen_new_block(self, ev):
-        if not self.enabled:
-            return
-        ref_block = self.get_latest_block()
-        parents = self.simulator.get_two_tips()
-        for tx in parents:
-            tx.confirm_parents()
-        if ref_block:
-            parents.append(ref_block)
-        block = self.simulator.new_tx(type='blk', time=self.simulator.cur_time, parents=parents, weight=self.weight, publisher=self)
-        block.update_acc_weight()
-        self.simulator.add_block(block)
-        self.schedule_next_block()
-
-
-class TxGenerator(object):
-    def __init__(self, tx_lambda, hashpower):
-        self.simulator = None
-        self.tx_lambda = tx_lambda
-        self.hashpower = hashpower
-        self.weight = 17
-        self.geometric_p = 2**(-self.weight)
-        self.enabled = False
-
-    def set_simulator(self, simulator):
-        self.simulator = simulator
-        self.events = simulator.events
-        self.tx_by_name = simulator.tx_by_name
-        self.transactions = simulator.transactions
-        self.tips = simulator.tips
-        self.schedule_next_tx()
-
-    def schedule_next_tx(self):
-        dt = random.expovariate(self.tx_lambda)
-        ev = Event(self.simulator.cur_time + dt, self.gen_new_pow, None)
-        heapq.heappush(self.events, ev)
-
-    def gen_new_pow(self, ev):
-        if not self.enabled:
-            return
-
-        trials = numpy.random.geometric(self.geometric_p)
-        dt = 1.0 * trials / self.hashpower
-
-        parents = self.simulator.get_two_tips()
-        tx = self.simulator.new_tx(type='tx', time=self.simulator.cur_time, parents=parents, weight=self.weight, publisher=self)
-        self.simulator.pow.add(tx)
-
-        ev = Event(self.simulator.cur_time + dt, self.gen_new_tx, tx)
-        heapq.heappush(self.events, ev)
-        self.schedule_next_tx()
-
-    def gen_new_tx(self, ev):
-        tx = ev.params
-        self.simulator.pow.remove(tx)
-        tx.confirm_parents()
-        tx.update_acc_weight()
-        self.tx_by_name[tx.name] = tx
-        self.simulator.add_tip(tx)
 
 
 class HathorSimulator(object):
