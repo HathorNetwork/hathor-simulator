@@ -15,13 +15,17 @@ class Transaction(object):
         self.is_confirmed = False
 
     def update_acc_weight(self, weight=None, used=None):
+        if self.simulator.ignore_update_acc_weight:
+            return
+
         if weight is None:
             weight = self.weight
         if used is None:
             used = set()
 
         used.add(self)
-        if self.acc_weight > self.simulator.min_weight_confirmed:
+        #if self.acc_weight > self.simulator.min_weight_confirmed:
+        if self.is_confirmed:
             return
 
         #self.acc_weight = log((2**self.acc_weight) + 2**weight)/log(2)

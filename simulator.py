@@ -14,11 +14,79 @@ from miner import Miner
 sys.setrecursionlimit(100000)
 
 
+class GenericMetric(object):
+    def __init__(self, interval):
+        self.simulator = None
+        self.interval = interval
+
+    def set_simulator(self, simulator):
+        self.simulator = simulator
+        self.events = simulator.events
+        self.schedule_next_sample()
+
+    def schedule_next_sample(self):
+        ev = Event(self.simulator.cur_time + self.interval, self.do_sample, None)
+        heapq.heappush(self.events, ev)
+
+    def do_sample(self, ev):
+        pass
+
+
+class UtterlyAcceptanceMetric(GenericMetric):
+    def __init__(self, interval):
+        super(UtterlyAcceptanceMetric, self).__init__(interval)
+        self.values = []
+
+    def do_sample(self, ev):
+        from collections import deque, defaultdict
+
+        self.schedule_next_sample()
+
+        sim = self.simulator
+
+        d = deque([(tip, 0, set()) for tip in sim.tips])
+        counter = defaultdict(int)
+
+        while d:
+            tx, level, used = d.popleft()
+
+            for x in tx.parents:
+                if hasattr(x, 'utterly_acceptance_dt'):
+                    continue
+
+                if x not in used:
+                    used.add(x)
+                    counter[x] += 1
+                    if counter[x] == len(sim.tips):
+                        dt = sim.cur_time - x.time
+                        assert(not hasattr(x, 'utterly_acceptance_dt'))
+                        x.utterly_acceptance_dt = dt
+                        self.values.append(dt)
+                    else:
+                        d.append((x, level+1, used))
+
+
+class TipsMetric(GenericMetric):
+    def __init__(self, interval):
+        super(TipsMetric, self).__init__(interval)
+        self.times = []
+        self.values = []
+
+    def do_sample(self, ev):
+        time = self.simulator.cur_time
+        value = len(self.simulator.tips)
+        self.times.append(time)
+        self.values.append(value)
+        self.schedule_next_sample()
+
+
 class HathorSimulator(object):
     def __init__(self, block_weight=17):
+        self.metrics = []
         self.miners = []
         self.tx_generators = []
         self.cur_time = 0
+        self.ignore_update_acc_weight = False
 
         self.tx_count = 0
         self.events = []
@@ -88,6 +156,11 @@ class HathorSimulator(object):
         for miner in self.miners:
             miner.update_weight(self.block_weight)
         self.latest_weight_update = self.cur_time
+
+
+    def add_metric(self, metric):
+        self.metrics.append(metric)
+        metric.set_simulator(self)
 
 
     def add_miner(self, miner):

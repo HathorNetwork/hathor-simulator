@@ -49,4 +49,3 @@ class TxGenerator(object):
         self.tx_by_name[tx.name] = tx
         self.simulator.add_tip(tx)
 
-
